@@ -262,6 +262,85 @@ class EscPosEncoder {
     return this;
   }
 
+/**
+     * Change width of text
+     *
+     * @param  {number}          width    The width of the text, 1 - 8
+     * @return {object}                   Return the object, for easy chaining commands
+     *
+     */
+  width(width) {
+    if (typeof width === 'undefined') {
+      width = 1;
+    }
+
+    if (typeof width !== 'number') {
+      throw new Error('Width must be a number');
+    }
+
+    if (width < 1 || width > 8) {
+      throw new Error('Width must be between 1 and 8');
+    }
+
+    this._state.width = width;
+
+    this._queue([
+      0x1d, 0x21, (this._state.height - 1) | (this._state.width - 1) << 4,
+    ]);
+
+    return this;
+  }
+
+  /**
+     * Change height of text
+     *
+     * @param  {number}          height  The height of the text, 1 - 8
+     * @return {object}                  Return the object, for easy chaining commands
+     *
+     */
+  height(height) {
+    if (typeof height === 'undefined') {
+      height = 1;
+    }
+
+    if (typeof height !== 'number') {
+      throw new Error('Height must be a number');
+    }
+
+    if (height < 1 || height > 8) {
+      throw new Error('Height must be between 1 and 8');
+    }
+
+    this._state.height = height;
+
+    this._queue([
+      0x1d, 0x21, (this._state.height - 1) | (this._state.width - 1) << 4,
+    ]);
+
+    return this;
+  }
+
+  /**
+     * Invert text
+     *
+     * @param  {boolean}          value  true to turn on white text on black, false to turn off
+     * @return {object}                  Return the object, for easy chaining commands
+     *
+     */
+  invert(value) {
+    if (typeof value === 'undefined') {
+      value = ! this._state.invert;
+    }
+
+    this._state.invert = value;
+
+    this._queue([
+      0x1d, 0x42, Number(value),
+    ]);
+
+    return this;
+  }
+  
   /**
      * Change text size
      *
@@ -307,6 +386,287 @@ class EscPosEncoder {
 
     return this;
   }
+  
+  /**
+     * Insert a table
+     *
+     * @param  {array}           columns  The column definitions
+     * @param  {array}           data     Array containing rows. Each row is an array containing cells.
+     *                                    Each cell can be a string value, or a callback function.
+     *                                    The first parameter of the callback is the encoder object on
+     *                                    which the function can call its methods.
+     * @return {object}                   Return the object, for easy chaining commands
+     *
+     */
+  table(columns, data) {
+    if (this._cursor != 0) {
+      this.newline();
+    }
+
+    for (let r = 0; r < data.length; r++) {
+      const lines = [];
+      let maxLines = 0;
+
+      for (let c = 0; c < columns.length; c++) {
+        const cell = [];
+
+        if (typeof data[r][c] === 'string') {
+          const w = linewrap(columns[c].width, {lineBreak: '\n'});
+          const fragments = w(data[r][c]).split('\n');
+
+          for (let f = 0; f < fragments.length; f++) {
+            if (columns[c].align == 'right') {
+              cell[f] = this._encode(fragments[f].padStart(columns[c].width));
+            } else {
+              cell[f] = this._encode(fragments[f].padEnd(columns[c].width));
+            }
+          }
+        }
+
+        if (typeof data[r][c] === 'function') {
+          const columnEncoder = new EscPosEncoder(Object.assign({}, this._options, {
+            width: columns[c].width,
+            embedded: true,
+          }));
+
+          columnEncoder._codepage = this._codepage;
+          columnEncoder.align(columns[c].align);
+          data[r][c](columnEncoder);
+          const encoded = columnEncoder.encode();
+
+          let fragment = [];
+
+          for (let e = 0; e < encoded.byteLength; e++) {
+            if (e < encoded.byteLength - 1) {
+              if (encoded[e] === 0x0a && encoded[e + 1] === 0x0d) {
+                cell.push(fragment);
+                fragment = [];
+
+                e++;
+                continue;
+              }
+            }
+
+            fragment.push(encoded[e]);
+          }
+
+          if (fragment.length) {
+            cell.push(fragment);
+          }
+        }
+
+        maxLines = Math.max(maxLines, cell.length);
+        lines[c] = cell;
+      }
+
+      for (let c = 0; c < columns.length; c++) {
+        if (lines[c].length < maxLines) {
+          for (let p = lines[c].length; p < maxLines; p++) {
+            let verticalAlign = 'top';
+            if (typeof columns[c].verticalAlign !== 'undefined') {
+              verticalAlign = columns[c].verticalAlign;
+            }
+
+            if (verticalAlign == 'bottom') {
+              lines[c].unshift((new Array(columns[c].width)).fill(0x20));
+            } else {
+              lines[c].push((new Array(columns[c].width)).fill(0x20));
+            }
+          }
+        }
+      }
+
+      for (let l = 0; l < maxLines; l++) {
+        for (let c = 0; c < columns.length; c++) {
+          if (typeof columns[c].marginLeft !== 'undefined') {
+            this.raw((new Array(columns[c].marginLeft)).fill(0x20));
+          }
+
+          this.raw(lines[c][l]);
+
+          if (typeof columns[c].marginRight !== 'undefined') {
+            this.raw((new Array(columns[c].marginRight)).fill(0x20));
+          }
+        }
+
+        this.newline();
+      }
+    }
+
+    return this;
+  }
+
+  /**
+     * Insert a horizontal rule
+     *
+     * @param  {object}          options  And object with the following properties:
+     *                                    - style: The style of the line, either single or double
+     *                                    - width: The width of the line, by default the width of the paper
+     * @return {object}                   Return the object, for easy chaining commands
+     *
+     */
+  rule(options) {
+    options = Object.assign({
+      style: 'single',
+      width: this._options.width || 10,
+    }, options || {});
+
+    this._queue([
+      0x1b, 0x74, this._getCodepageIdentifier('cp437'),
+      (new Array(options.width)).fill(options.style === 'double' ? 0xcd : 0xc4),
+    ]);
+
+    this._queue([
+      0x1b, 0x74, this._state.codepage,
+    ]);
+
+    this.newline();
+
+    return this;
+  }
+
+  /**
+     * Insert a horizontal rule
+     *
+     * @param  {object}           options   And object with the following properties:
+     *                                      - style: The style of the border, either single or double
+     *                                      - width: The width of the box, by default the width of the paper, if specified
+     *                                      - marginLeft: Space between the left border and the left side of the paper
+     *                                      - marginRight: Space between the right border and the right side of the paper
+     *                                      - paddingLeft: Space between the contents and the left border of the box
+     *                                      - paddingRight: Space between the contents and the right border of the box
+     * @param  {string|function}  contents  A string value, or a callback function.
+     *                                      The first parameter of the callback is the encoder object on
+     *                                      which the function can call its methods.
+     * @return {object}                     Return the object, for easy chaining commands
+     *
+     */
+  box(options, contents) {
+    options = Object.assign({
+      style: 'single',
+      width: this._options.width || 30,
+      marginLeft: 0,
+      marginRight: 0,
+      paddingLeft: 0,
+      paddingRight: 0,
+    }, options || {});
+
+    let elements;
+
+    if (options.style == 'double') {
+      elements = [0xc9, 0xbb, 0xc8, 0xbc, 0xcd, 0xba]; // ╔╗╚╝═║
+    } else {
+      elements = [0xda, 0xbf, 0xc0, 0xd9, 0xc4, 0xb3]; // ┌┐└┘─│
+    }
+
+    if (this._cursor != 0) {
+      this.newline();
+    }
+
+    this._restoreState();
+
+    this._queue([
+      0x1b, 0x74, this._getCodepageIdentifier('cp437'),
+    ]);
+
+    this._queue([
+      new Array(options.marginLeft).fill(0x20),
+      elements[0],
+      new Array(options.width - 2).fill(elements[4]),
+      elements[1],
+      new Array(options.marginRight).fill(0x20),
+    ]);
+
+    this.newline();
+
+    const cell = [];
+
+    if (typeof contents === 'string') {
+      const w = linewrap(options.width - 2 - options.paddingLeft - options.paddingRight, {lineBreak: '\n'});
+      const fragments = w(contents).split('\n');
+
+      for (let f = 0; f < fragments.length; f++) {
+        if (options.align == 'right') {
+          cell[f] = this._encode(fragments[f].padStart(options.width - 2 - options.paddingLeft - options.paddingRight));
+        } else {
+          cell[f] = this._encode(fragments[f].padEnd(options.width - 2 - options.paddingLeft - options.paddingRight));
+        }
+      }
+    }
+
+    if (typeof contents === 'function') {
+      const columnEncoder = new EscPosEncoder(Object.assign({}, this._options, {
+        width: options.width - 2 - options.paddingLeft - options.paddingRight,
+        embedded: true,
+      }));
+
+      columnEncoder._codepage = this._codepage;
+      columnEncoder.align(options.align);
+      contents(columnEncoder);
+      const encoded = columnEncoder.encode();
+
+      let fragment = [];
+
+      for (let e = 0; e < encoded.byteLength; e++) {
+        if (e < encoded.byteLength - 1) {
+          if (encoded[e] === 0x0a && encoded[e + 1] === 0x0d) {
+            cell.push(fragment);
+            fragment = [];
+
+            e++;
+            continue;
+          }
+        }
+
+        fragment.push(encoded[e]);
+      }
+
+      if (fragment.length) {
+        cell.push(fragment);
+      }
+    }
+
+    for (let c = 0; c < cell.length; c++) {
+      this._queue([
+        new Array(options.marginLeft).fill(0x20),
+        elements[5],
+        new Array(options.paddingLeft).fill(0x20),
+      ]);
+
+      this._queue([
+        cell[c],
+      ]);
+
+      this._restoreState();
+
+      this._queue([
+        0x1b, 0x74, this._getCodepageIdentifier('cp437'),
+      ]);
+
+      this._queue([
+        new Array(options.paddingRight).fill(0x20),
+        elements[5],
+        new Array(options.marginRight).fill(0x20),
+      ]);
+
+      this.newline();
+    }
+
+    this._queue([
+      new Array(options.marginLeft).fill(0x20),
+      elements[2],
+      new Array(options.width - 2).fill(elements[4]),
+      elements[3],
+      new Array(options.marginRight).fill(0x20),
+    ]);
+
+    this._restoreState();
+
+    this.newline();
+
+    return this;
+  }
+
 
   /**
      * Barcode
@@ -629,6 +989,42 @@ class EscPosEncoder {
     return this;
   }
 
+  /**
+     * Pulse
+     *
+     * @param  {number}          device  0 or 1 for on which pin the device is connected, default of 0
+     * @param  {number}          on      Time the pulse is on in milliseconds, default of 100
+     * @param  {number}          off     Time the pulse is off in milliseconds, default of 500
+     * @return {object}                  Return the object, for easy chaining commands
+     *
+     */
+  pulse(device, on, off) {
+    if (this._embedded) {
+      throw new Error('Pulse is not supported in table cells or boxes');
+    }
+
+    if (typeof device === 'undefined') {
+      device = 0;
+    }
+
+    if (typeof on === 'undefined') {
+      on = 100;
+    }
+
+    if (typeof off === 'undefined') {
+      off = 500;
+    }
+
+    on = Math.min(500, Math.round(on / 2));
+    off = Math.min(500, Math.round(off / 2));
+
+    this._queue([
+      0x1b, 0x70, device ? 1 : 0, on & 0xff, off & 0xff,
+    ]);
+
+    return this;
+  }
+  
   /**
      * Add raw printer commands
      *
