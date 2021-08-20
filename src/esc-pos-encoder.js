@@ -176,10 +176,17 @@ class EscPosEncoder {
      * @return {object}          Return the object, for easy chaining commands
      *
      */
-  newline() {
-    this._queue([
-      0x0a, 0x0d,
-    ]);
+  newline(value) {
+      
+    if (typeof value === 'undefined') {
+      value = 0;
+    }
+    
+    for (let i = 0; i <= value; i++) {
+        this._queue([
+            0x0a, 0x0d,
+        ]);
+    } 
 
     return this;
   }
