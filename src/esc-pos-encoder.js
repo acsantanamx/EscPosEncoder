@@ -1033,6 +1033,21 @@ class EscPosEncoder {
   }
   
   /**
+     * Beep
+     *
+     * @return {object}                  Return the object, for easy chaining commands
+     *
+     */
+  beep() {
+      
+      this._queue([
+        0x1b, 0x42, 0x3, 0x2  
+      ]);
+    
+      return this;
+  }
+  
+  /**
      * Add raw printer commands
      *
      * @param  {array}           data   raw bytes to be included
