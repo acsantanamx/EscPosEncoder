@@ -515,7 +515,7 @@ class EscPosEncoder {
   rule(options) {
     options = Object.assign({
       style: 'single',
-      width: this._options.width || 10,
+      width: options.width || 10,
     }, options || {});
 
     this._queue([
@@ -551,7 +551,7 @@ class EscPosEncoder {
   box(options, contents) {
     options = Object.assign({
       style: 'single',
-      width: this._options.width || 30,
+      width: options.width || 30,
       marginLeft: 0,
       marginRight: 0,
       paddingLeft: 0,
